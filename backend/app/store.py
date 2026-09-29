@@ -14,6 +14,13 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        self._seed_staffshift()
+
+    def _seed_staffshift(self) -> None:
+        """人员排班演示数据依赖运行当天日期，放独立模块避免与服务层循环导入。"""
+        from app.staffshift_seed import seed_demo_data
+
+        seed_demo_data(self)
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -43,7 +50,15 @@ class Store:
             {"label": "待处理", "value": sum(int(item["pending"]) for item in modules)},
             {"label": "异常量", "value": sum(int(item["abnormal"]) for item in modules)},
         ]
-        return {"cards": cards, "modules": modules}
+        result: dict[str, object] = {"cards": cards, "modules": modules}
+        # 各班次缺口与值班看板用同一份有效排班推导，格子一改这里立刻跟着变。
+        try:
+            from app.services.staffshift import StaffshiftService
+
+            result["staffshiftGaps"] = StaffshiftService().shift_gap_summary()
+        except Exception:  # noqa: BLE001 - 概览不应因排班模块异常而整体不可用
+            result["staffshiftGaps"] = None
+        return result
 
 
 store = Store()
