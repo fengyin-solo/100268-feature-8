@@ -34,7 +34,7 @@ class Store:
             modules.append({
                 "name": name,
                 "created": len(rows),
-                "pending": sum(1 for row in rows if row.get("pending")),
+                "pending": sum(1 for row in rows if row.get("pending") and not row.get("voided")),
                 "abnormal": sum(1 for row in rows if row.get("abnormal")),
             })
         cards = [

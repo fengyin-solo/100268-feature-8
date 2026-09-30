@@ -1,4 +1,4 @@
-"""人员排班接口：维护排班记录，覆盖确认排班、安排替班、申请调班等动作。"""
+"""人员排班接口：排班登记、状态流转、值班看板与班组台账共用同一份有效排班。"""
 from __future__ import annotations
 
 from typing import Any
@@ -19,7 +19,7 @@ STATUSES = ["待确认", "已确认", "已替班", "已调班"]
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按排班编号检索"),
-    status: str | None = Query(default=None, description="待确认、已确认、已替班、已调班"),
+    status: str | None = Query(default=None, description="待确认、已确认、已替班、已调班、已作废"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
@@ -28,6 +28,29 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/board")
+def week_board(
+    week_start: str | None = Query(default=None, description="看板周内任意日期或周一，格式 YYYY-MM-DD"),
+) -> dict[str, Any]:
+    """值班看板：每个班次一行、每天一列，缺口与缺替班在格子上直接标出。"""
+    return service.week_board(week_start)
+
+
+@router.get("/roster")
+def day_roster(
+    date: str = Query(..., description="查看哪天的班组台账，格式 YYYY-MM-DD"),
+) -> dict[str, Any]:
+    """班组台账：在岗人与看板格子同源；整天无排班按未排班呈现。"""
+    return service.roster(date)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出人员排班清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "staffshift", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -41,25 +64,21 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条排班记录，缺字段时说明原因而不是静默丢弃。"""
+    """登记一条排班记录，缺字段时说明原因而不是静默丢弃。
+
+    同一岗位同一天同一班次再次登记时，旧记录自动作废，以最后一次排班为准。
+    """
     entry, missing = service.create_entry(payload.values)
     if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message="排班记录已登记", entry=entry)
+        return ActionResult(ok=False, message=f"缺少必填字段或取值不合法：{'、'.join(missing)}")
+    return ActionResult(ok=True, message="排班记录已登记；如与既有排班冲突，前一次已自动作废", entry=entry)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条排班记录执行确认排班、安排替班、申请调班；不允许的动作会被拦下并说明原因。"""
+    """对单条排班执行确认排班、安排替班（需带替班人员）、申请调班。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出人员排班清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "staffshift", "total": total, "items": items}
